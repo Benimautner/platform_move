@@ -10,6 +10,9 @@
 
   Buttons use input_pullup, so they should be connected to short to ground when pressed!
 
+  Anfahrrampe
+  Langsamer
+
 */
 
 #define TYPE_TIME unsigned long
@@ -23,8 +26,9 @@
 #define BOTTOM_LIMITER_PIN 8
 
 #define PULSESPERREV 5000
-#define PULSE_DELAY_US 100 // can be as low as 5, according to datasheet of motor
+#define PULSE_DELAY_US 150 // can be as low as 5, according to datasheet of motor. Higher = slower movement
 #define SHORT_PRESS_MS 200 // clicks of buttons under 200 ms count as short clicks
+#define RAMPUP_PULSES 50  // motors slowly get faster. The first pulse has an extra 50 ms of delay, the second one 49 etc...
 
 #define DIRECTION_UP 0  // HIGH or LOW, depending on the preferred direction for upwards motion
 #define DIRECTION_DOWN !DIRECTION_UP
@@ -60,14 +64,36 @@ struct Buttons {
 struct Controller {
   Buttons buttons;
   int direction = -1;
-  int pulsesperrev = PULSESPERREV;
+  int rampup_pulses = 0;
   DriveStatus driveStatus = STOPPED;
 
   void pulse() {
-    digitalWrite(PULSE_PIN, HIGH);
-    delayMicroseconds(PULSE_DELAY_US);
-    digitalWrite(PULSE_PIN, LOW);
-    delayMicroseconds(PULSE_DELAY_US);
+    for(int i = 0; i < 10; i++) {
+      digitalWrite(PULSE_PIN, HIGH);
+      delayMicroseconds(PULSE_DELAY_US);
+      digitalWrite(PULSE_PIN, LOW);
+      delayMicroseconds(PULSE_DELAY_US);
+      if(rampup_pulses < RAMPUP_PULSES) {
+        delay(RAMPUP_PULSES - rampup_pulses);
+        rampup_pulses++;
+      }
+    }
+  }
+
+  void enable_motors() {
+      digitalWrite(ENABLE_PIN, LOW);
+      delay(20);
+  }
+
+  void disable_motors() {
+      digitalWrite(ENABLE_PIN, HIGH);
+      delay(20);
+      rampup_pulses = 0;
+  }
+
+  void set_direction(int direction) {
+    digitalWrite(DIRECTION_PIN, direction);
+    delay(20);
   }
 
   void update_input_button(bool read, Button& btn) {
@@ -111,13 +137,13 @@ struct Controller {
     // if one of the limiter is pressed, ignore buttons and drive in the other direction
     if (buttons.top_limiter.status || buttons.bottom_limiter.status) {
       buttons.ignore = true;
-      digitalWrite(ENABLE_PIN, LOW);
+      enable_motors();
       while (buttons.top_limiter.status || buttons.bottom_limiter.status) {
         update_buttons();
-        digitalWrite(DIRECTION_PIN, buttons.top_limiter.status ? DIRECTION_DOWN : DIRECTION_UP);
+        set_direction(buttons.top_limiter.status ? DIRECTION_DOWN : DIRECTION_UP);
         pulse();
       }
-      digitalWrite(ENABLE_PIN, HIGH);
+      disable_motors();
       driveStatus = STOPPED;
     }
 
@@ -163,27 +189,20 @@ struct Controller {
 
   void drive() {
     if (driveStatus == STOPPED) {
-      digitalWrite(ENABLE_PIN, HIGH);
+      disable_motors();
       return;
     }
   
     if (driveStatus == UP_MANUAL || driveStatus == UP_TILL_STOP) {
-      digitalWrite(ENABLE_PIN, LOW);
-      digitalWrite(DIRECTION_PIN, DIRECTION_UP);
-      // always do a quarter rev at once
-      for (int i = 0; i < 20; i++) {
-        pulse();
-      }
+      enable_motors();
+      set_direction(DIRECTION_UP);
+      pulse();
+      
     }
     else if (driveStatus == DOWN_MANUAL || driveStatus == DOWN_TILL_STOP) {
-      digitalWrite(ENABLE_PIN, LOW);
-      digitalWrite(DIRECTION_PIN, DIRECTION_DOWN);
-      // we want a response time of < 20 ms.
-      // we spend 1 ms per pulse (at 100us width)
-      // so we cannot do more than 20 pulses at once
-      for (int i = 0; i < 100; i++) {
-        pulse();
-      }
+      enable_motors();
+      set_direction(DIRECTION_DOWN);
+      pulse();
     }
 
   }
@@ -205,7 +224,7 @@ void setup() {
   pinMode(TOP_LIMITER_PIN, INPUT_PULLUP);
   pinMode(BOTTOM_LIMITER_PIN, INPUT_PULLUP);
 
-  digitalWrite(ENABLE_PIN, HIGH);
+  controller.disable_motors();
 }
 
 void loop() {
